@@ -1,0 +1,11 @@
+{
+  "name": "lldoc-rag",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "parse": "node scripts/liteparse_parse.mjs"
+  },
+  "dependencies": {
+    "@llamaindex/liteparse": "1.4.1"
+  }
+}
