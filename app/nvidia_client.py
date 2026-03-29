@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Callable, Sequence
 
 import httpx
 
@@ -21,30 +22,48 @@ class NvidiaClient:
             },
         )
 
-    def embed_texts(self, texts: Sequence[str], *, input_type: str) -> list[list[float]]:
+    def embed_texts(
+        self,
+        texts: Sequence[str],
+        *,
+        input_type: str,
+        batch_size: int = 64,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
         if not texts:
             return []
 
-        response = self.client.post(
-            "/embeddings",
-            json={
-                "input": list(texts),
-                "model": self.settings.nvidia_embed_model,
-                "input_type": input_type,
-                "encoding_format": "float",
-                "truncate": self.settings.nvidia_embed_truncate,
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        ordered = sorted(data["data"], key=lambda item: item["index"])
-        return [item["embedding"] for item in ordered]
+        text_list = list(texts)
+        embeddings: list[list[float]] = []
+        total = len(text_list)
+
+        for start in range(0, total, batch_size):
+            batch = text_list[start : start + batch_size]
+            response = self.client.post(
+                "/embeddings",
+                json={
+                    "input": batch,
+                    "model": self.settings.nvidia_embed_model,
+                    "input_type": input_type,
+                    "encoding_format": "float",
+                    "truncate": self.settings.nvidia_embed_truncate,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            ordered = sorted(data["data"], key=lambda item: item["index"])
+            embeddings.extend(item["embedding"] for item in ordered)
+            if progress_callback is not None:
+                progress_callback(min(start + len(batch), total), total)
+
+        return embeddings
 
     def generate_retrieval_statements(
         self,
         *,
         source_path: str,
         page_snippets: Sequence[tuple[int, str]],
+        document_title: str | None = None,
     ) -> list[dict[str, int | str]]:
         if not page_snippets:
             return []
@@ -59,13 +78,9 @@ class NvidiaClient:
             f"[PAGE {page_num}]\n{snippet}" for page_num, snippet in page_snippets
         )
 
-        title = self._extract_profile_statement(
-            prompt=(
-                f"Source path: {source_path}\n\n"
-                f"Cuplikan halaman awal:\n{first_page_blocks}\n\n"
-                "Tulis satu kalimat berisi judul resmi dokumen jika terlihat jelas. "
-                "Jika tidak jelas, tulis TIDAK JELAS."
-            ),
+        title = document_title or self.infer_document_title(
+            source_path=source_path,
+            page_snippets=page_snippets,
         )
         if title is not None:
             statements.append({"page_num": first_page_num, "text": title})
@@ -107,6 +122,102 @@ class NvidiaClient:
             seen_texts.add(normalized_text)
             deduped.append(statement)
         return deduped
+
+    def infer_document_title(
+        self,
+        *,
+        source_path: str,
+        page_snippets: Sequence[tuple[int, str]],
+    ) -> str | None:
+        if not page_snippets:
+            return None
+
+        first_pages = list(page_snippets[:3])
+        first_page_blocks = "\n\n".join(
+            f"[PAGE {page_num}]\n{snippet}" for page_num, snippet in first_pages
+        )
+        content = self._chat_completion(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Buat judul tampilan dokumen yang singkat dan mudah dipindai. "
+                        "Pertahankan jenis dokumen, nomor/tahun, dan topik inti. "
+                        "Gunakan hanya informasi yang benar-benar terlihat pada cuplikan. "
+                        "Boleh gunakan singkatan umum seperti Permen, PP, Kepmen, Perpres, "
+                        "atau UU jika membuat judul lebih ringkas. "
+                        "Jangan awali dengan kata seperti Dokumen ini, Dokumen dimaksud, "
+                        "atau Judul dokumen. Jika tidak cukup jelas, jawab TIDAK JELAS. "
+                        "Keluarkan hanya judul tanpa penjelasan tambahan."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Source path: {source_path}\n\nCuplikan halaman awal:\n{first_page_blocks}"
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=120,
+        )
+        normalized = self._normalize_statement(content)
+        if not normalized or normalized == "tidak jelas":
+            return None
+        return self._format_document_title(content)
+
+    @staticmethod
+    def _format_document_title(title: str) -> str:
+        cleaned = " ".join(title.split()).strip().rstrip(".")
+        cleaned = re.sub(
+            r"^(dokumen (ini|tersebut|dimaksud) (adalah|berjudul)\s+)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"^(judul (dokumen\s*)?(resmi\s*)?(adalah\s*)?)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+        phrase_replacements = [
+            ("Peraturan Menteri Energi dan Sumber Daya Mineral", "Permen ESDM"),
+            ("Peraturan Menteri", "Permen"),
+            ("Peraturan Pemerintah", "PP"),
+            ("Keputusan Menteri", "Kepmen"),
+            ("Peraturan Presiden", "Perpres"),
+            ("Undang-Undang", "UU"),
+            ("Peraturan Daerah", "Perda"),
+            ("Peraturan Gubernur", "Pergub"),
+            ("Peraturan Bupati", "Perbup"),
+            ("Peraturan Wali Kota", "Perwali"),
+            ("Peraturan Walikota", "Perwali"),
+            ("Peraturan Pelaksanaan", "Pelaksanaan"),
+            ("Kegiatan Usaha Pertambangan Mineral dan Batubara", "Usaha Pertambangan Minerba"),
+        ]
+        for source, replacement in phrase_replacements:
+            cleaned = re.sub(source, replacement, cleaned, flags=re.IGNORECASE)
+
+        cleaned = re.sub(
+            r"\bNomor\s+(\d+)\s+Tahun\s+(\d{4})\b",
+            r"\1/\2",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\btentang\b", ":", cleaned, count=1, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*:\s*", ": ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,;:")
+
+        if len(cleaned) <= 96:
+            return cleaned
+
+        trimmed = cleaned[:96]
+        split_at = trimmed.rfind(" ")
+        if split_at > 64:
+            trimmed = trimmed[:split_at]
+        return trimmed.rstrip(" ,;:") + "…"
 
     def _extract_profile_statement(self, *, prompt: str) -> str | None:
         content = self._chat_completion(
@@ -161,11 +272,7 @@ class NvidiaClient:
         normalized_tokens = "".join(
             character if character.isalnum() else " " for character in normalized
         )
-        return [
-            token
-            for token in normalized_tokens.split()
-            if token.isdigit() or len(token) > 2
-        ]
+        return [token for token in normalized_tokens.split() if token.isdigit() or len(token) > 2]
 
     @staticmethod
     def _normalize_statement(text: str) -> str:
@@ -261,11 +368,25 @@ class NvidiaClient:
         context_blocks: Sequence[str],
         *,
         retrieval_query: str | None = None,
+        conversation_history: Sequence[tuple[str, str]] | None = None,
     ) -> str:
         context = "\n\n".join(context_blocks)
         intent_block = ""
         if retrieval_query:
             intent_block = f"Maksud pencarian:\n{retrieval_query}\n\n"
+        history_block = ""
+        if conversation_history:
+            history_lines = []
+            for role, content in conversation_history[-6:]:
+                normalized = " ".join(content.split()).strip()
+                if not normalized:
+                    continue
+                if len(normalized) > 320:
+                    normalized = normalized[:320].rstrip() + "..."
+                speaker = "Pengguna" if role == "user" else "Asisten"
+                history_lines.append(f"{speaker}: {normalized}")
+            if history_lines:
+                history_block = "Riwayat percakapan:\n" + "\n".join(history_lines) + "\n\n"
         answer = self._chat_completion(
             messages=[
                 {
@@ -277,12 +398,15 @@ class NvidiaClient:
                         "gunakan citation inline seperti [1]. Jangan menulis placeholder atau "
                         "teks buatan seperti [citasi], [judul], [nomor], [placeholder], atau "
                         "bentuk serupa. Bila nama peraturan atau judul dokumen terlihat di "
-                        "konteks, salin apa adanya. Jawab langsung tanpa preamble."
+                        "konteks, salin apa adanya. Gunakan riwayat percakapan hanya untuk "
+                        "memahami referensi seperti ini, itu, atau lanjutan pertanyaan, bukan "
+                        "sebagai sumber fakta. Jawab langsung tanpa preamble."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
+                        f"{history_block}"
                         f"Question:\n{question}\n\n"
                         f"{intent_block}"
                         f"Context:\n{context}\n\n"

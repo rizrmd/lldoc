@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -24,6 +25,13 @@ def _get_int(name: str, default: int) -> int:
 def _get_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     return float(raw) if raw else default
+
+
+def _get_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,8 @@ class Settings:
     top_k: int
     rag_context_chars_per_chunk: int
     rag_context_max_chars: int
+    app_data_dir: Path
+    cors_origins: list[str]
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +69,14 @@ def get_settings() -> Settings:
 
     target_pages = os.getenv("LITEPARSE_TARGET_PAGES", "").strip() or None
     qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip() or None
+    app_data_dir = Path(os.getenv("APP_DATA_DIR", "data")).expanduser().resolve()
+    cors_origins = _get_list(
+        "CORS_ORIGINS",
+        [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+    )
 
     return Settings(
         qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
@@ -84,4 +102,6 @@ def get_settings() -> Settings:
         top_k=_get_int("TOP_K", 6),
         rag_context_chars_per_chunk=_get_int("RAG_CONTEXT_CHARS_PER_CHUNK", 800),
         rag_context_max_chars=_get_int("RAG_CONTEXT_MAX_CHARS", 2400),
+        app_data_dir=app_data_dir,
+        cors_origins=cors_origins,
     )

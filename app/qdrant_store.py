@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,6 +43,8 @@ class QdrantStore:
             )
 
     def delete_document(self, document_id: str) -> None:
+        if not self.client.collection_exists(self.settings.qdrant_collection):
+            return
         self.client.delete(
             collection_name=self.settings.qdrant_collection,
             wait=True,
@@ -57,27 +60,38 @@ class QdrantStore:
             ),
         )
 
-    def upsert_chunks(self, chunks: list[dict[str, Any]]) -> None:
-        points = [
-            models.PointStruct(
-                id=chunk["chunk_id"],
-                vector=chunk["embedding"],
-                payload={
-                    "document_id": chunk["document_id"],
-                    "source_path": chunk["source_path"],
-                    "page_num": chunk["page_num"],
-                    "chunk_index": chunk["chunk_index"],
-                    "text": chunk["text"],
-                    "metadata": chunk["metadata"],
-                },
+    def upsert_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        *,
+        batch_size: int = 128,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> None:
+        total = len(chunks)
+        for start in range(0, total, batch_size):
+            batch = chunks[start : start + batch_size]
+            points = [
+                models.PointStruct(
+                    id=chunk["chunk_id"],
+                    vector=chunk["embedding"],
+                    payload={
+                        "document_id": chunk["document_id"],
+                        "source_path": chunk["source_path"],
+                        "page_num": chunk["page_num"],
+                        "chunk_index": chunk["chunk_index"],
+                        "text": chunk["text"],
+                        "metadata": chunk["metadata"],
+                    },
+                )
+                for chunk in batch
+            ]
+            self.client.upsert(
+                collection_name=self.settings.qdrant_collection,
+                wait=True,
+                points=points,
             )
-            for chunk in chunks
-        ]
-        self.client.upsert(
-            collection_name=self.settings.qdrant_collection,
-            wait=True,
-            points=points,
-        )
+            if progress_callback is not None:
+                progress_callback(min(start + len(batch), total), total)
 
     def search(
         self,
@@ -86,6 +100,8 @@ class QdrantStore:
         limit: int,
         document_ids: list[str] | None = None,
     ) -> list[SearchHit]:
+        if not self.client.collection_exists(self.settings.qdrant_collection):
+            return []
         response = self.client.query_points(
             collection_name=self.settings.qdrant_collection,
             query=query_vector,
@@ -99,6 +115,8 @@ class QdrantStore:
         ]
 
     def scroll_chunks(self, *, document_ids: list[str] | None = None) -> list[SearchHit]:
+        if not self.client.collection_exists(self.settings.qdrant_collection):
+            return []
         hits: list[SearchHit] = []
         offset: Any = None
         query_filter = self._build_document_filter(document_ids)
@@ -118,6 +136,11 @@ class QdrantStore:
             offset = next_offset
 
         return hits
+
+    def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
 
     @staticmethod
     def _build_hit(

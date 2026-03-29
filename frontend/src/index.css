@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 41 47% 96%;
+    --foreground: 216 27% 16%;
+    --card: 0 0% 100%;
+    --card-foreground: 216 27% 16%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 27% 16%;
+    --primary: 191 84% 28%;
+    --primary-foreground: 43 56% 96%;
+    --secondary: 31 73% 90%;
+    --secondary-foreground: 216 27% 16%;
+    --muted: 42 30% 91%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 27 78% 52%;
+    --accent-foreground: 44 64% 97%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 35 29% 81%;
+    --input: 35 29% 81%;
+    --ring: 191 84% 28%;
+    --radius: 1.4rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply min-h-screen bg-background font-sans text-foreground antialiased;
+    background-image:
+      radial-gradient(circle at top left, rgba(244, 143, 48, 0.18), transparent 30%),
+      radial-gradient(circle at top right, rgba(33, 117, 144, 0.2), transparent 28%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(244, 239, 230, 0.9));
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    margin: 0;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display text-foreground;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+@layer utilities {
+  .surface-grid {
+    background-image:
+      linear-gradient(rgba(190, 176, 154, 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(190, 176, 154, 0.1) 1px, transparent 1px);
+    background-position: center;
+    background-size: 28px 28px;
+  }
+
+  .surface-shadow {
+    box-shadow: 0 26px 60px -28px rgba(28, 42, 58, 0.28);
+  }
+
+  .glass-panel {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 252, 246, 0.86));
+    backdrop-filter: blur(14px);
+  }
+}

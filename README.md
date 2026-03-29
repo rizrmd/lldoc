@@ -1,10 +1,13 @@
 # LiteParse + Qdrant + NVIDIA NIM RAG
 
-Backend RAG minimal untuk:
+Backend RAG + frontend workspace untuk:
 
 - parsing dokumen dengan `@llamaindex/liteparse`
 - vector store dengan `Qdrant`
 - embeddings dan jawaban LLM lewat endpoint OpenAI-compatible `NVIDIA`
+- chat dokumen via React + shadcn-style UI
+- file management dengan upload, re-ingest, delete, download
+- async document ingestion dengan status polling
 
 ## Arsitektur
 
@@ -33,7 +36,14 @@ Catatan LiteParse:
 cp .env.example .env
 npm install
 uv sync
-docker compose up -d
+docker compose up -d qdrant
+```
+
+Untuk frontend:
+
+```bash
+cd frontend
+npm install
 ```
 
 Isi `.env` minimal dengan `NVIDIA_API_KEY`.
@@ -59,6 +69,40 @@ Endpoint utama:
 - `GET /health`
 - `POST /ingest`
 - `POST /query`
+- `POST /chat`
+- `GET /documents`
+- `POST /documents/upload`
+- `POST /documents/{document_id}/ingest`
+- `DELETE /documents/{document_id}`
+- `GET /documents/{document_id}/download`
+- `GET /jobs`
+
+## Menjalankan Frontend
+
+```bash
+cd frontend
+npm run dev
+```
+
+Secara default frontend memanggil `http://127.0.0.1:8000`. Jika perlu, override dengan:
+
+```bash
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+## Menjalankan Full Stack Dengan Docker Compose
+
+Setelah `.env` diisi, jalankan:
+
+```bash
+docker compose up --build
+```
+
+Akses service:
+
+- frontend: `http://localhost:3000`
+- API: `http://localhost:8000`
+- Qdrant: `http://localhost:6333`
 
 ## Menjalankan CLI
 
@@ -74,6 +118,8 @@ uv run python -m app.cli chat
 uv run ruff format .
 uv run ruff check .
 uv run ty check
+cd frontend && npm run lint
+cd frontend && npm run build
 ```
 
 ## Contoh Request

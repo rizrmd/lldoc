@@ -4,6 +4,7 @@ import hashlib
 import math
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -13,7 +14,9 @@ from app.config import Settings
 from app.liteparse_client import LiteParseClient, ParsedDocument
 from app.nvidia_client import NvidiaClient
 from app.qdrant_store import QdrantStore, SearchHit
-from app.schemas import Citation, IngestResponse, QueryResponse
+from app.schemas import ChatMessage, Citation, IngestResponse, QueryResponse
+
+ProgressCallback = Callable[[int, str], None]
 
 
 class RagService:
@@ -35,11 +38,24 @@ class RagService:
         *,
         document_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> IngestResponse:
+        self._report_progress(progress_callback, 10, "Parsing dokumen")
         parsed = self.liteparse_client.parse_document(source_path)
         metadata = metadata or {}
         document_id = document_id or self._make_document_id(parsed.source_path)
+        sampled_profile_pages = self._sample_profile_pages(parsed)
 
+        self._report_progress(progress_callback, 20, "Menerka judul dokumen")
+        try:
+            document_title = self.nvidia_client.infer_document_title(
+                source_path=parsed.source_path,
+                page_snippets=sampled_profile_pages,
+            )
+        except (httpx.HTTPError, ValueError, TypeError, KeyError):
+            document_title = None
+
+        self._report_progress(progress_callback, 30, "Menyusun chunk")
         raw_chunks: list[dict[str, Any]] = []
         for page in parsed.pages:
             page_chunks = chunk_text(
@@ -61,36 +77,70 @@ class RagService:
                     }
                 )
 
+        self._report_progress(progress_callback, 44, "Menyusun profil dokumen")
         raw_chunks.extend(
             self._build_document_profile_chunks(
                 parsed,
                 document_id=document_id,
                 metadata=metadata,
+                document_title=document_title,
+                sampled_pages=sampled_profile_pages,
             )
         )
 
         if not raw_chunks:
             raise RuntimeError("No text chunks were produced from the document")
 
+        self._report_progress(progress_callback, 47, "Embedding chunk")
         embeddings = self.nvidia_client.embed_texts(
             [chunk["text"] for chunk in raw_chunks],
             input_type="passage",
+            progress_callback=lambda completed, total: self._report_progress(
+                progress_callback,
+                self._scale_progress(completed, total, start=47, end=78),
+                f"Embedding chunk ({completed}/{total})",
+            ),
         )
+        self._report_progress(progress_callback, 82, "Menyiapkan index")
         self.qdrant_store.ensure_collection(vector_size=len(embeddings[0]))
         self.qdrant_store.delete_document(document_id)
 
         upsertable = []
         for chunk, embedding in zip(raw_chunks, embeddings, strict=True):
             upsertable.append({**chunk, "embedding": embedding})
-        self.qdrant_store.upsert_chunks(upsertable)
+        self.qdrant_store.upsert_chunks(
+            upsertable,
+            progress_callback=lambda completed, total: self._report_progress(
+                progress_callback,
+                self._scale_progress(completed, total, start=82, end=98),
+                f"Menulis ke index ({completed}/{total})",
+            ),
+        )
 
         return IngestResponse(
             document_id=document_id,
             source_path=parsed.source_path,
+            document_title=document_title,
             pages_indexed=len(parsed.pages),
             chunks_indexed=len(upsertable),
             collection_name=self.settings.qdrant_collection,
         )
+
+    @staticmethod
+    def _report_progress(
+        progress_callback: ProgressCallback | None,
+        progress_percent: int,
+        progress_label: str,
+    ) -> None:
+        if progress_callback is not None:
+            progress_callback(progress_percent, progress_label)
+
+    @staticmethod
+    def _scale_progress(completed: int, total: int, *, start: int, end: int) -> int:
+        if total <= 0:
+            return end
+        span = max(end - start, 1)
+        return min(start + math.ceil((completed / total) * span), end)
 
     def query(
         self,
@@ -98,6 +148,7 @@ class RagService:
         *,
         top_k: int | None = None,
         document_ids: list[str] | None = None,
+        conversation_history: list[tuple[str, str]] | None = None,
     ) -> QueryResponse:
         desired_top_k = top_k or self.settings.top_k
         retrieval_queries = self._build_retrieval_queries(question)
@@ -158,6 +209,7 @@ class RagService:
                 question,
                 context_blocks,
                 retrieval_query=retrieval_queries[-1],
+                conversation_history=conversation_history,
             )
         except httpx.TimeoutException:
             answer = (
@@ -168,6 +220,33 @@ class RagService:
             answer=answer,
             citations=citations,
             context_count=len(citations),
+        )
+
+    def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        top_k: int | None = None,
+        document_ids: list[str] | None = None,
+    ) -> QueryResponse:
+        turn_messages = [
+            message
+            for message in messages
+            if message.role in {"user", "assistant"} and message.content.strip()
+        ]
+        if not turn_messages or turn_messages[-1].role != "user":
+            raise ValueError("The latest chat message must be from the user")
+
+        latest_question = turn_messages[-1].content.strip()
+        conversation_history: list[tuple[str, str]] = []
+        for message in turn_messages[:-1]:
+            conversation_history.append((message.role, message.content.strip()))
+        conversation_history = conversation_history[-6:]
+        return self.query(
+            latest_question,
+            top_k=top_k,
+            document_ids=document_ids,
+            conversation_history=conversation_history,
         )
 
     @staticmethod
@@ -444,11 +523,7 @@ class RagService:
         normalized_tokens = "".join(
             character if character.isalnum() else " " for character in normalized
         )
-        return [
-            token
-            for token in normalized_tokens.split()
-            if token.isdigit() or len(token) > 2
-        ]
+        return [token for token in normalized_tokens.split() if token.isdigit() or len(token) > 2]
 
     def _build_document_profile_chunks(
         self,
@@ -456,6 +531,8 @@ class RagService:
         *,
         document_id: str,
         metadata: dict[str, Any],
+        document_title: str | None = None,
+        sampled_pages: list[tuple[int, str]] | None = None,
     ) -> list[dict[str, Any]]:
         if not parsed.pages:
             return []
@@ -481,7 +558,8 @@ class RagService:
         try:
             statements = self.nvidia_client.generate_retrieval_statements(
                 source_path=parsed.source_path,
-                page_snippets=self._sample_profile_pages(parsed),
+                page_snippets=sampled_pages or self._sample_profile_pages(parsed),
+                document_title=document_title,
             )
         except (httpx.HTTPError, ValueError, TypeError, KeyError):
             statements = []
@@ -615,3 +693,7 @@ class RagService:
                 seen_chunk_ids.add(hit.chunk_id)
                 merged.append(hit)
         return merged
+
+    def close(self) -> None:
+        self.nvidia_client.close()
+        self.qdrant_store.close()
