@@ -74,10 +74,15 @@ export interface UploadDocumentResponse {
   job: IngestionJob
 }
 
-const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000'
-
 function getApiBaseUrl() {
-  return (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/$/, '')
+  const configuredBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+  if (configuredBaseUrl) {
+    return configuredBaseUrl
+  }
+  if (import.meta.env.DEV) {
+    return 'http://127.0.0.1:8000'
+  }
+  return '/api'
 }
 
 export function buildApiUrl(path: string) {
