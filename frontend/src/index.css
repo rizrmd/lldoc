@@ -36,8 +36,13 @@
     @apply scroll-smooth;
   }
 
+  html,
   body {
-    @apply min-h-screen bg-background font-sans text-foreground antialiased;
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
     background-image:
       radial-gradient(circle at top left, rgba(244, 143, 48, 0.18), transparent 30%),
       radial-gradient(circle at top right, rgba(33, 117, 144, 0.2), transparent 28%),
@@ -54,8 +59,18 @@
   }
 
   #root {
-    @apply min-h-screen;
+    @apply h-full;
   }
+}
+
+/* assistant-ui thread styling */
+.aui-root {
+  --aui-thread-max-width: 56rem;
+  height: 100%;
+}
+
+.aui-thread-root {
+  height: 100%;
 }
 
 @layer utilities {
