@@ -10,7 +10,7 @@ import {
 } from '@assistant-ui/react'
 import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ArrowUp, FileStack } from 'lucide-react'
+import { ArrowUp, FileStack, LoaderCircle } from 'lucide-react'
 
 import { chat, type Citation, type DocumentDetail } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -277,6 +277,7 @@ function AssistantMessage({
   getDocLabel: (documentId: string) => string
 }) {
   const message = useMessage()
+  const isLoading = message.status?.type === 'running'
   const textContent = message.content
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map((p) => p.text)
@@ -287,16 +288,18 @@ function AssistantMessage({
     <MessagePrimitive.Root className="mb-6 flex justify-start">
       <div className="w-full max-w-[56rem] space-y-3">
         <div className="rounded-[1.9rem] border border-border/80 bg-white/92 px-6 py-5 shadow-[0_24px_60px_-36px_rgba(20,42,74,0.35)]">
-          <MessagePrimitive.If assistant>
-            <div className="mb-3 flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/12 text-primary">
+          <div className="mb-3 flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/12 text-primary">
+              {isLoading ? (
+                <LoaderCircle className="h-4 w-4 animate-spin" />
+              ) : (
                 <ArrowUp className="h-3.5 w-3.5 rotate-45" />
-              </div>
-              <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Assistant
-              </span>
+              )}
             </div>
-          </MessagePrimitive.If>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              {isLoading ? 'Berpikir...' : 'Assistant'}
+            </span>
+          </div>
           <MessagePrimitive.Content
             components={{
               Text: MarkdownText,
