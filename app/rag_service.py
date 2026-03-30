@@ -151,11 +151,12 @@ class RagService:
         conversation_history: list[tuple[str, str]] | None = None,
     ) -> QueryResponse:
         desired_top_k = top_k or self.settings.top_k
-        retrieval_queries = self._build_retrieval_queries(question)
-        dense_hits = self._search_dense_candidates(
-            retrieval_queries,
+        normalized_question = self._normalize_whitespace(question)
+        query_vector = self.nvidia_client.embed_texts([normalized_question], input_type="query")[0]
+        dense_hits = self.qdrant_store.search(
+            query_vector,
+            limit=desired_top_k * 4,
             document_ids=document_ids,
-            limit=max(desired_top_k * 24, 192),
         )
         if not dense_hits:
             return QueryResponse(
@@ -164,14 +165,7 @@ class RagService:
                 context_count=0,
             )
 
-        hits = self._select_context_hits(
-            question,
-            retrieval_queries=retrieval_queries,
-            dense_hits=dense_hits,
-            document_ids=document_ids,
-            limit=desired_top_k,
-        )
-        hits = self._filter_hits_for_context(retrieval_queries[-1], hits)
+        hits = dense_hits[:desired_top_k]
 
         context_blocks = []
         citations: list[Citation] = []
@@ -208,7 +202,7 @@ class RagService:
             answer = self.nvidia_client.answer_question(
                 question,
                 context_blocks,
-                retrieval_query=retrieval_queries[-1],
+                retrieval_query=normalized_question,
                 conversation_history=conversation_history,
             )
         except httpx.TimeoutException:
