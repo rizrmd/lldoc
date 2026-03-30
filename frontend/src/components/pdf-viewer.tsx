@@ -3,10 +3,7 @@ import { ChevronLeft, ChevronRight, LoaderCircle } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
 import { Button } from '@/components/ui/button'
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url,
-).toString()
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`
 
 interface PdfViewerProps {
   url: string
