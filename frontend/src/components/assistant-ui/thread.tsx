@@ -29,6 +29,7 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  LoaderCircleIcon,
   MoreHorizontalIcon,
   PencilIcon,
   RefreshCwIcon,
@@ -209,6 +210,12 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
     >
       <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
+        <AuiIf condition={(s) => s.message.isLast && s.thread.isRunning && s.message.content.length === 0}>
+          <div className="flex items-center gap-2 py-2 text-muted-foreground">
+            <LoaderCircleIcon className="size-4 animate-spin" />
+            <span className="text-sm">Berpikir...</span>
+          </div>
+        </AuiIf>
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />;
