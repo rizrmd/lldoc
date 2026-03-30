@@ -8,11 +8,17 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { FileStack } from 'lucide-react'
 
-import { chat, type Citation, type DocumentDetail } from '@/lib/api'
+import { buildApiUrl, chat, type Citation, type DocumentDetail } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Thread as AssistantThread } from '@/components/assistant-ui/thread'
 
 interface ChatPageProps {
@@ -216,6 +222,7 @@ export function ChatPage({
 // Citations component rendered after assistant messages
 export const AssistantMessageCitations: FC = () => {
   const message = useMessage()
+  const [previewCitation, setPreviewCitation] = useState<Citation | null>(null)
   const textContent = message.content
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map((p) => p.text)
@@ -225,27 +232,60 @@ export const AssistantMessageCitations: FC = () => {
   if (!stored || stored.citations.length === 0) return null
 
   return (
-    <div className="mx-auto mt-1 grid w-full max-w-[var(--thread-max-width)] gap-3 px-2 pb-3 xl:grid-cols-2">
-      {stored.citations.map((citation) => (
-        <div
-          key={citation.chunk_id}
-          className="rounded-xl border border-border/70 bg-background/85 p-4"
-        >
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-foreground">
-              {CitationsContext.getDocLabel(citation.document_id)}
+    <>
+      <div className="mx-auto mt-1 grid w-full max-w-[var(--thread-max-width)] gap-3 px-2 pb-3 xl:grid-cols-2">
+        {stored.citations.map((citation) => (
+          <button
+            type="button"
+            key={citation.chunk_id}
+            className="cursor-pointer rounded-xl border border-border/70 bg-background/85 p-4 text-left transition-colors hover:border-primary/40 hover:bg-primary/5"
+            onClick={() => setPreviewCitation(citation)}
+          >
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-foreground">
+                {CitationsContext.getDocLabel(citation.document_id)}
+              </p>
+              <Badge variant="outline">p.{citation.page_num}</Badge>
+            </div>
+            <p className="line-clamp-4 text-sm leading-relaxed text-muted-foreground">
+              {citation.text}
             </p>
-            <Badge variant="outline">p.{citation.page_num}</Badge>
+            <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground">
+              score {citation.score.toFixed(3)}
+            </p>
+          </button>
+        ))}
+      </div>
+
+      <Dialog
+        open={previewCitation !== null}
+        onOpenChange={(open) => { if (!open) setPreviewCitation(null) }}
+      >
+        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-0">
+          <DialogHeader className="px-6 pt-6 pb-3">
+            <DialogTitle className="flex items-center justify-between gap-3">
+              <span className="truncate">
+                {previewCitation && CitationsContext.getDocLabel(previewCitation.document_id)}
+              </span>
+              {previewCitation && (
+                <Badge variant="outline" className="shrink-0">
+                  Halaman {previewCitation.page_num}
+                </Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-hidden px-6 pb-6">
+            {previewCitation && (
+              <iframe
+                src={`${buildApiUrl(`/documents/${previewCitation.document_id}/download`)}#page=${previewCitation.page_num}`}
+                className="h-full w-full rounded-lg border"
+                title="PDF Preview"
+              />
+            )}
           </div>
-          <p className="line-clamp-4 text-sm leading-relaxed text-muted-foreground">
-            {citation.text}
-          </p>
-          <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground">
-            score {citation.score.toFixed(3)}
-          </p>
-        </div>
-      ))}
-    </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
