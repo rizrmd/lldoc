@@ -152,11 +152,15 @@ class RagService:
     ) -> QueryResponse:
         desired_top_k = top_k or self.settings.top_k
         normalized_question = self._normalize_whitespace(question)
-        retrieval_query, dense_queries = self._build_retrieval_queries(normalized_question)
-        dense_hits = self._search_dense_candidates(
-            dense_queries,
+
+        # Single embedding call — no query rewrite LLM call
+        query_vector = self.nvidia_client.embed_texts(
+            [normalized_question], input_type="query"
+        )[0]
+        dense_hits = self.qdrant_store.search(
+            query_vector,
+            limit=desired_top_k * 8,
             document_ids=document_ids,
-            limit=max(desired_top_k * 6, 18),
         )
         if not dense_hits:
             return QueryResponse(
@@ -165,18 +169,8 @@ class RagService:
                 context_count=0,
             )
 
-        hits = self._select_context_hits(
-            normalized_question,
-            retrieval_query=retrieval_query,
-            dense_hits=dense_hits,
-            document_ids=document_ids,
-            limit=desired_top_k,
-        )
-        hits = self._filter_hits_for_context(retrieval_query, hits)[:desired_top_k]
-        if not hits:
-            hits = self._filter_hits_for_context(retrieval_query, dense_hits)[:desired_top_k]
-        if not hits:
-            hits = dense_hits[:desired_top_k]
+        # Send more context to the LLM so it can filter noise itself
+        hits = dense_hits[:desired_top_k]
 
         context_blocks = []
         citations: list[Citation] = []
@@ -213,7 +207,7 @@ class RagService:
             answer = self.nvidia_client.answer_question(
                 question,
                 context_blocks,
-                retrieval_query=retrieval_query,
+                retrieval_query=normalized_question,
                 conversation_history=conversation_history,
             )
         except httpx.TimeoutException:
