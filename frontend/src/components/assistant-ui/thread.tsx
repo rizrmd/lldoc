@@ -35,7 +35,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import type { FC } from "react";
+import { useEffect, useState, type FC } from "react";
 
 export const Thread: FC = () => {
   return (
@@ -211,10 +211,7 @@ const AssistantMessage: FC = () => {
     >
       <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
         <AuiIf condition={(s) => s.message.isLast && s.thread.isRunning && s.message.content.length === 0}>
-          <div className="flex items-center gap-2 py-2 text-muted-foreground">
-            <LoaderCircleIcon className="size-4 animate-spin" />
-            <span className="text-sm">Berpikir...</span>
-          </div>
+          <ThinkingIndicator />
         </AuiIf>
         <MessagePrimitive.Parts>
           {({ part }) => {
@@ -373,5 +370,21 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
         </TooltipIconButton>
       </BranchPickerPrimitive.Next>
     </BranchPickerPrimitive.Root>
+  );
+};
+
+const ThinkingIndicator: FC = () => {
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setElapsed((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div className="flex items-center gap-2 py-2 text-muted-foreground">
+      <LoaderCircleIcon className="size-4 animate-spin" />
+      <span className="text-sm">Berpikir... ({elapsed}s)</span>
+    </div>
   );
 };
