@@ -13,7 +13,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       NVIDIA_API_KEY: ${NVIDIA_API_KEY}
-      NVIDIA_CHAT_MODEL: microsoft/phi-3.5-mini-instruct
+      NVIDIA_CHAT_MODEL: qwen/qwen3.5-397b-a17b
       NVIDIA_CHAT_MAX_TOKENS: 1024
       TOP_K: 12
       RAG_CONTEXT_CHARS_PER_CHUNK: 1200
