@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Thread as AssistantThread } from '@/components/assistant-ui/thread'
+import { PdfViewer } from '@/components/pdf-viewer'
 
 interface ChatPageProps {
   documents: DocumentDetail[]
@@ -274,12 +275,11 @@ export const AssistantMessageCitations: FC = () => {
               )}
             </DialogTitle>
           </DialogHeader>
-          <div className="flex-1 overflow-hidden px-6 pb-6">
+          <div className="flex-1 overflow-hidden">
             {previewCitation && (
-              <iframe
-                src={`${buildApiUrl(`/documents/${previewCitation.document_id}/download`)}#page=${previewCitation.page_num}`}
-                className="h-full w-full rounded-lg border"
-                title="PDF Preview"
+              <PdfViewer
+                url={buildApiUrl(`/documents/${previewCitation.document_id}/download`)}
+                initialPage={previewCitation.page_num}
               />
             )}
           </div>
