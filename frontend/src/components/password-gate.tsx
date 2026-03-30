@@ -36,7 +36,7 @@ export function PasswordGate({ children }: { children: React.ReactNode }) {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/12 text-primary">
             <Lock className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl">LLDoc</h1>
+          <h1 className="text-2xl">AIDoc</h1>
           <p className="text-sm text-muted-foreground">Masukkan password untuk melanjutkan</p>
         </div>
 

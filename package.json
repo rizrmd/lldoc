@@ -6,6 +6,7 @@
     "parse": "node scripts/liteparse_parse.mjs"
   },
   "dependencies": {
-    "@llamaindex/liteparse": "1.4.1"
+    "@llamaindex/liteparse": "1.4.1",
+    "tailwindcss-animate": "^1.0.7"
   }
 }

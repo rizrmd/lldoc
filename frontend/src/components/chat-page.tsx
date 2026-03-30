@@ -225,7 +225,7 @@ export const AssistantMessageCitations: FC = () => {
   if (!stored || stored.citations.length === 0) return null
 
   return (
-    <div className="mx-auto mt-1 grid w-full max-w-(--thread-max-width) gap-3 px-2 pb-3 xl:grid-cols-2">
+    <div className="mx-auto mt-1 grid w-full max-w-[var(--thread-max-width)] gap-3 px-2 pb-3 xl:grid-cols-2">
       {stored.citations.map((citation) => (
         <div
           key={citation.chunk_id}

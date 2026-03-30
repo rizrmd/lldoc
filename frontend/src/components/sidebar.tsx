@@ -42,7 +42,7 @@ export function Sidebar({
       <div className="flex items-center gap-3 border-b border-border/60 px-4 py-4">
         {!collapsed && (
           <h1 className="flex-1 font-display text-lg font-semibold text-foreground">
-            LLDoc
+            AIDoc
           </h1>
         )}
         <button

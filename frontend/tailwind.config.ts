@@ -1,10 +1,14 @@
 import type { Config } from 'tailwindcss'
 import typography from '@tailwindcss/typography'
+import animate from 'tailwindcss-animate'
 
 const config: Config = {
   darkMode: ['class'],
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
+    container: {
+      center: true,
+    },
     extend: {
       colors: {
         background: 'hsl(var(--background))',
@@ -44,10 +48,20 @@ const config: Config = {
           '0%, 100%': { transform: 'scale(1)', opacity: '0.92' },
           '50%': { transform: 'scale(1.03)', opacity: '1' },
         },
+        'collapsible-down': {
+          from: { height: '0' },
+          to: { height: 'var(--radix-collapsible-content-height)' },
+        },
+        'collapsible-up': {
+          from: { height: 'var(--radix-collapsible-content-height)' },
+          to: { height: '0' },
+        },
       },
       animation: {
         rise: 'rise 500ms ease-out both',
         'pulse-soft': 'pulseSoft 3.2s ease-in-out infinite',
+        'collapsible-down': 'collapsible-down 0.2s ease-out',
+        'collapsible-up': 'collapsible-up 0.2s ease-out',
       },
       fontFamily: {
         sans: ['Manrope', 'sans-serif'],
@@ -55,7 +69,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [typography],
+  plugins: [typography, animate],
 }
 
 export default config
