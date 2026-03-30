@@ -1,22 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
   useMessage,
-  ThreadPrimitive,
-  MessagePrimitive,
-  ComposerPrimitive,
   type ChatModelAdapter,
 } from '@assistant-ui/react'
-import { MarkdownTextPrimitive } from '@assistant-ui/react-markdown'
-import remarkGfm from 'remark-gfm'
-import { ArrowUp, FileStack, LoaderCircle } from 'lucide-react'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { FileStack } from 'lucide-react'
 
 import { chat, type Citation, type DocumentDetail } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Thread as AssistantThread } from '@/components/assistant-ui/thread'
 
 interface ChatPageProps {
   documents: DocumentDetail[]
@@ -28,6 +25,35 @@ interface ChatPageProps {
 interface StoredCitations {
   citations: Citation[]
   contextCount: number
+}
+
+// Context for passing citations data to message components
+const CitationsContext = {
+  _map: new Map<string, StoredCitations>(),
+  _docs: [] as DocumentDetail[],
+  set(answer: string, data: StoredCitations) {
+    this._map.set(answer, data)
+  },
+  get(answer: string) {
+    return this._map.get(answer)
+  },
+  setDocs(docs: DocumentDetail[]) {
+    this._docs = docs
+  },
+  getDocLabel(documentId: string) {
+    const match = this._docs.find(
+      (d) => d.document.document_id === documentId,
+    )
+    if (!match) return documentId
+    const title = match.document.title?.trim()
+    if (title) {
+      if (title.length <= 60) return title.replace(/\.$/, '')
+      const trimmed = title.slice(0, 60)
+      const splitAt = trimmed.lastIndexOf(' ')
+      return `${(splitAt > 30 ? trimmed.slice(0, splitAt) : trimmed).replace(/[,:;]+$/, '')}…`
+    }
+    return match.document.file_name
+  },
 }
 
 export function ChatPage({
@@ -54,13 +80,10 @@ export function ChatPage({
     selectedReadyIdsRef.current = selectedReadyIds
   }, [selectedDocumentIds, selectedReadyIds])
 
-  // Store citations keyed by assistant message content hash
-  const [citationsMap, setCitationsMap] = useState<Map<string, StoredCitations>>(
-    () => new Map(),
-  )
-  const documentsRef = useRef(documents)
+  // Keep citations context in sync
+  const [, forceUpdate] = useState(0)
   useEffect(() => {
-    documentsRef.current = documents
+    CitationsContext.setDocs(documents)
   }, [documents])
 
   const adapter: ChatModelAdapter = useMemo(
@@ -87,16 +110,12 @@ export function ChatPage({
         try {
           const response = await chat(payload)
 
-          // Store citations for this response
           if (response.citations.length > 0) {
-            setCitationsMap((prev) => {
-              const next = new Map(prev)
-              next.set(response.answer, {
-                citations: response.citations,
-                contextCount: response.context_count,
-              })
-              return next
+            CitationsContext.set(response.answer, {
+              citations: response.citations,
+              contextCount: response.context_count,
             })
+            forceUpdate((n) => n + 1)
           }
 
           return {
@@ -116,22 +135,6 @@ export function ChatPage({
     selectedDocumentIds.length > 0
       ? selectedReadyIds.length > 0
       : readyDocuments.length > 0
-
-  const getCitations = useCallback(
-    (text: string) => citationsMap.get(text),
-    [citationsMap],
-  )
-
-  const getDocLabel = useCallback(
-    (documentId: string) => {
-      const match = documentsRef.current.find(
-        (d) => d.document.document_id === documentId,
-      )
-      if (!match) return documentId
-      return getDocumentTitle(match.document)
-    },
-    [],
-  )
 
   return (
     <div className="flex h-full flex-col">
@@ -199,150 +202,50 @@ export function ChatPage({
             </div>
           </div>
         ) : (
-          <AssistantRuntimeProvider runtime={runtime}>
-            <ThreadPrimitive.Root className="flex h-full flex-col">
-              <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto">
-                <div className="mx-auto w-full max-w-3xl px-4 py-8">
-                  <ThreadPrimitive.Empty>
-                    <div className="flex flex-col items-center gap-3 py-16 text-center">
-                      <h3 className="font-display text-2xl text-foreground">
-                        LLDoc Chat
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        Tanya seputar dokumen yang sudah diindeks.
-                      </p>
-                    </div>
-                  </ThreadPrimitive.Empty>
-
-                  <ThreadPrimitive.Messages
-                    components={{
-                      UserMessage,
-                      AssistantMessage: () => (
-                        <AssistantMessage
-                          getCitations={getCitations}
-                          getDocLabel={getDocLabel}
-                        />
-                      ),
-                    }}
-                  />
-                </div>
-              </ThreadPrimitive.Viewport>
-
-              <div className="border-t border-border/60 bg-card/40 backdrop-blur-sm">
-                <div className="mx-auto w-full max-w-3xl px-4 py-4">
-                  <ComposerPrimitive.Root className="flex items-end gap-3 rounded-[1.4rem] border border-border/80 bg-card/90 px-4 py-3 shadow-soft focus-within:ring-2 focus-within:ring-ring">
-                    <ComposerPrimitive.Input
-                      placeholder="Tulis pertanyaan..."
-                      rows={1}
-                      autoFocus
-                      className="min-h-[36px] flex-1 resize-none border-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                    />
-                    <ComposerPrimitive.Send className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40">
-                      <ArrowUp className="h-4 w-4" />
-                    </ComposerPrimitive.Send>
-                  </ComposerPrimitive.Root>
-                </div>
-              </div>
-            </ThreadPrimitive.Root>
-          </AssistantRuntimeProvider>
+          <TooltipProvider>
+            <AssistantRuntimeProvider runtime={runtime}>
+              <AssistantThread />
+            </AssistantRuntimeProvider>
+          </TooltipProvider>
         )}
       </div>
     </div>
   )
 }
 
-function UserMessage() {
-  return (
-    <MessagePrimitive.Root className="mb-4 flex justify-end">
-      <div className="max-w-[38rem] rounded-[1.6rem] border border-primary/30 bg-primary px-5 py-4 text-primary-foreground shadow-soft">
-        <MessagePrimitive.Content
-          components={{
-            Text: ({ text }) => (
-              <p className="whitespace-pre-wrap text-[15px] leading-7">
-                {text}
-              </p>
-            ),
-          }}
-        />
-      </div>
-    </MessagePrimitive.Root>
-  )
-}
-
-function AssistantMessage({
-  getCitations,
-  getDocLabel,
-}: {
-  getCitations: (text: string) => StoredCitations | undefined
-  getDocLabel: (documentId: string) => string
-}) {
+// Citations component rendered after assistant messages
+export const AssistantMessageCitations: FC = () => {
   const message = useMessage()
-  const isLoading = message.status?.type === 'running'
   const textContent = message.content
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map((p) => p.text)
     .join('')
-  const stored = getCitations(textContent)
+  const stored = CitationsContext.get(textContent)
+
+  if (!stored || stored.citations.length === 0) return null
 
   return (
-    <MessagePrimitive.Root className="mb-6 flex justify-start">
-      <div className="w-full max-w-[56rem] space-y-3">
-        <div className="rounded-[1.9rem] border border-border/80 bg-white/92 px-6 py-5 shadow-[0_24px_60px_-36px_rgba(20,42,74,0.35)]">
-          <div className="mb-3 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary/12 text-primary">
-              {isLoading ? (
-                <LoaderCircle className="h-4 w-4 animate-spin" />
-              ) : (
-                <ArrowUp className="h-3.5 w-3.5 rotate-45" />
-              )}
-            </div>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              {isLoading ? 'Berpikir...' : 'Assistant'}
-            </span>
+    <div className="mx-auto mt-1 grid w-full max-w-(--thread-max-width) gap-3 px-2 pb-3 xl:grid-cols-2">
+      {stored.citations.map((citation) => (
+        <div
+          key={citation.chunk_id}
+          className="rounded-xl border border-border/70 bg-background/85 p-4"
+        >
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-foreground">
+              {CitationsContext.getDocLabel(citation.document_id)}
+            </p>
+            <Badge variant="outline">p.{citation.page_num}</Badge>
           </div>
-          <MessagePrimitive.Content
-            components={{
-              Text: MarkdownText,
-            }}
-          />
+          <p className="line-clamp-4 text-sm leading-relaxed text-muted-foreground">
+            {citation.text}
+          </p>
+          <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground">
+            score {citation.score.toFixed(3)}
+          </p>
         </div>
-
-        {stored && stored.citations.length > 0 && (
-          <div className="grid gap-3 xl:grid-cols-2">
-            {stored.citations.map((citation) => (
-              <div
-                key={citation.chunk_id}
-                className="rounded-[1.5rem] border border-border/70 bg-background/85 p-4"
-              >
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-foreground">
-                    {getDocLabel(citation.document_id)}
-                  </p>
-                  <Badge variant="outline">p.{citation.page_num}</Badge>
-                </div>
-                <p className="line-clamp-5 text-sm leading-7 text-muted-foreground">
-                  {citation.text}
-                </p>
-                <p className="mt-3 text-xs uppercase tracking-[0.16em] text-muted-foreground">
-                  context {stored.contextCount} | score{' '}
-                  {citation.score.toFixed(3)}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </MessagePrimitive.Root>
-  )
-}
-
-function MarkdownText() {
-  return (
-    <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm]}
-      className="prose prose-sm max-w-none text-foreground prose-headings:font-display prose-headings:text-foreground prose-p:leading-7 prose-a:text-primary prose-code:rounded prose-code:bg-secondary prose-code:px-1.5 prose-code:py-0.5 prose-code:text-foreground prose-pre:bg-secondary/80 prose-pre:text-foreground"
-      smooth
-    />
+      ))}
+    </div>
   )
 }
 
