@@ -13,7 +13,7 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       NVIDIA_API_KEY: ${NVIDIA_API_KEY}
-      NVIDIA_CHAT_MODEL: moonshotai/kimi-k2-instruct
+      NVIDIA_CHAT_MODEL: qwen/qwen2.5-7b-instruct
       NVIDIA_CHAT_MAX_TOKENS: 1024
       APP_DATA_DIR: /app/data
       CORS_ORIGINS: ${CORS_ORIGINS:-https://aidoc.avolut.com}
