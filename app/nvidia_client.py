@@ -400,7 +400,17 @@ class NvidiaClient:
                         "bentuk serupa. Bila nama peraturan atau judul dokumen terlihat di "
                         "konteks, salin apa adanya. Gunakan riwayat percakapan hanya untuk "
                         "memahami referensi seperti ini, itu, atau lanjutan pertanyaan, bukan "
-                        "sebagai sumber fakta. Jawab langsung tanpa preamble."
+                        "sebagai sumber fakta. Jangan samakan istilah yang berbeda hanya karena "
+                        "mirip bunyi atau akar kata, misalnya sanksi tidak sama dengan sanggah "
+                        "dan pelanggar tidak sama dengan pelanggan kecuali konteks menyatakannya "
+                        "secara eksplisit. Jika pertanyaan menanyakan sanksi, hukuman, atau "
+                        "akibat hukum tetapi konteks hanya membahas prosedur, sanggahan, atau "
+                        "istilah lain, katakan bahwa konteks tidak menyebut sanksi tersebut "
+                        "secara eksplisit. Jika istilah yang dipakai pengguna tidak muncul di "
+                        "konteks tetapi ada istilah dokumen yang paling dekat dan jelas, sebutkan "
+                        "istilah dokumen itu secara eksplisit alih-alih mengulang istilah pengguna "
+                        "mentah-mentah. Jangan menyebut nomor pasal, kewajiban, atau akibat hukum "
+                        "kecuali benar-benar tertulis pada konteks. Jawab langsung tanpa preamble."
                     ),
                 },
                 {

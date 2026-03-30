@@ -152,11 +152,11 @@ class RagService:
     ) -> QueryResponse:
         desired_top_k = top_k or self.settings.top_k
         normalized_question = self._normalize_whitespace(question)
-        query_vector = self.nvidia_client.embed_texts([normalized_question], input_type="query")[0]
-        dense_hits = self.qdrant_store.search(
-            query_vector,
-            limit=desired_top_k * 4,
+        retrieval_query, dense_queries = self._build_retrieval_queries(normalized_question)
+        dense_hits = self._search_dense_candidates(
+            dense_queries,
             document_ids=document_ids,
+            limit=max(desired_top_k * 6, 18),
         )
         if not dense_hits:
             return QueryResponse(
@@ -165,7 +165,18 @@ class RagService:
                 context_count=0,
             )
 
-        hits = dense_hits[:desired_top_k]
+        hits = self._select_context_hits(
+            normalized_question,
+            retrieval_query=retrieval_query,
+            dense_hits=dense_hits,
+            document_ids=document_ids,
+            limit=desired_top_k,
+        )
+        hits = self._filter_hits_for_context(retrieval_query, hits)[:desired_top_k]
+        if not hits:
+            hits = self._filter_hits_for_context(retrieval_query, dense_hits)[:desired_top_k]
+        if not hits:
+            hits = dense_hits[:desired_top_k]
 
         context_blocks = []
         citations: list[Citation] = []
@@ -202,7 +213,7 @@ class RagService:
             answer = self.nvidia_client.answer_question(
                 question,
                 context_blocks,
-                retrieval_query=normalized_question,
+                retrieval_query=retrieval_query,
                 conversation_history=conversation_history,
             )
         except httpx.TimeoutException:
@@ -269,7 +280,7 @@ class RagService:
         self,
         question: str,
         *,
-        retrieval_queries: list[str],
+        retrieval_query: str,
         dense_hits: list[SearchHit],
         document_ids: list[str] | None,
         limit: int,
@@ -280,7 +291,6 @@ class RagService:
         candidate_hits = self.qdrant_store.scroll_chunks(document_ids=candidate_document_ids)
         if not candidate_hits:
             return dense_hits[:limit]
-        retrieval_query = retrieval_queries[-1]
         hybrid_hits = self._hybrid_rank_hits(
             question,
             retrieval_query=retrieval_query,
@@ -303,14 +313,17 @@ class RagService:
             dense_hits[: max(limit * 6, 18)],
             lexical_hits,
         )[:24]
+        prioritized_pool = self._prioritize_hits_for_query(retrieval_query, rerank_pool)
+        if len(prioritized_pool) <= limit:
+            return prioritized_pool
         selected_hits = self._select_hits_with_model(
             question,
-            candidate_hits=rerank_pool,
+            candidate_hits=prioritized_pool,
             limit=limit,
         )
         if selected_hits:
             return selected_hits
-        return hybrid_hits[:limit]
+        return prioritized_pool[:limit]
 
     def _hybrid_rank_hits(
         self,
@@ -374,14 +387,30 @@ class RagService:
         scored_hits.sort(key=lambda item: item[0], reverse=True)
         return [hit for _, hit in scored_hits[:limit]]
 
-    def _build_retrieval_queries(self, question: str) -> list[str]:
-        queries = [self._normalize_whitespace(question)]
+    def _build_retrieval_queries(self, question: str) -> tuple[str, list[str]]:
+        normalized_question = self._normalize_whitespace(question)
+        retrieval_query = normalized_question
+        queries = [normalized_question]
         try:
             rewritten = self._normalize_whitespace(self.nvidia_client.rewrite_for_search(question))
         except (httpx.HTTPError, ValueError):
             rewritten = ""
         if rewritten:
+            retrieval_query = rewritten
             queries.append(rewritten)
+            queries.extend(self._build_backoff_queries(rewritten))
+        else:
+            queries.extend(self._build_backoff_queries(normalized_question))
+        return retrieval_query, self._unique_in_order(query for query in queries if query)
+
+    def _build_backoff_queries(self, query: str) -> list[str]:
+        tokens = self._tokenize(query)
+        if len(tokens) < 2:
+            return []
+
+        queries = [tokens[0], " ".join(tokens[:-1])]
+        if len(tokens) >= 3:
+            queries.append(" ".join(tokens[: max(2, math.ceil(len(tokens) / 2))]))
         return self._unique_in_order(query for query in queries if query)
 
     def _search_dense_candidates(
@@ -434,20 +463,81 @@ class RagService:
         retrieval_query: str,
         hits: list[SearchHit],
     ) -> list[SearchHit]:
-        lexical_scores = self._bm25_scores(self._tokenize(retrieval_query), hits)
+        prioritized_hits = self._prioritize_hits_for_query(retrieval_query, hits)
+        lexical_scores = self._bm25_scores(self._tokenize(retrieval_query), prioritized_hits)
         if not lexical_scores:
-            return hits
+            return prioritized_hits
 
         filtered_hits = [
             item
             for item in sorted(
-                hits,
+                prioritized_hits,
                 key=lambda hit: lexical_scores.get(hit.chunk_id, 0.0),
                 reverse=True,
             )
             if lexical_scores.get(item.chunk_id, 0.0) > 0
         ]
-        return filtered_hits or hits
+        return filtered_hits or prioritized_hits
+
+    def _prioritize_hits_for_query(
+        self,
+        retrieval_query: str,
+        hits: list[SearchHit],
+    ) -> list[SearchHit]:
+        if not hits:
+            return []
+
+        query_terms = self._tokenize(retrieval_query)
+        if not query_terms:
+            return hits
+
+        token_sets = {hit.chunk_id: set(self._tokenize(hit.text)) for hit in hits}
+        present_terms = [
+            term
+            for term in query_terms
+            if any(term in token_set for token_set in token_sets.values())
+        ]
+        if not present_terms:
+            return hits
+
+        term_document_counts = {
+            term: sum(1 for token_set in token_sets.values() if term in token_set)
+            for term in present_terms
+        }
+        max_anchor_frequency = max(1, min(3, math.ceil(len(hits) / 2)))
+        anchor_terms = [
+            term
+            for term in present_terms
+            if term_document_counts[term] <= max_anchor_frequency
+        ]
+        if not anchor_terms:
+            rarest_count = min(term_document_counts.values())
+            anchor_terms = [
+                term for term, count in term_document_counts.items() if count == rarest_count
+            ]
+
+        anchor_hits = [
+            hit
+            for hit in hits
+            if any(term in token_sets[hit.chunk_id] for term in anchor_terms)
+        ]
+        if not anchor_hits:
+            return hits
+
+        lexical_scores = self._bm25_scores(anchor_terms, anchor_hits)
+        if not lexical_scores:
+            return anchor_hits
+
+        prioritized_hits = [
+            item
+            for item in sorted(
+                anchor_hits,
+                key=lambda hit: lexical_scores.get(hit.chunk_id, 0.0),
+                reverse=True,
+            )
+            if lexical_scores.get(item.chunk_id, 0.0) > 0
+        ]
+        return prioritized_hits or anchor_hits
 
     def _document_profile_hits(
         self,

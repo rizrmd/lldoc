@@ -30,12 +30,17 @@ class QueryRequest(BaseModel):
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str = Field(min_length=1)
+    message_id: str | None = None
+    created_at: datetime | None = None
+    citations: list[Citation] = Field(default_factory=list)
+    context_count: int = 0
 
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
     top_k: int | None = None
     document_ids: list[str] | None = None
+    conversation_id: str | None = None
 
 
 class Citation(BaseModel):
@@ -51,6 +56,34 @@ class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
     context_count: int
+
+
+class ConversationMessage(BaseModel):
+    message_id: str
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+    created_at: datetime
+    citations: list[Citation] = Field(default_factory=list)
+    context_count: int = 0
+
+
+class ConversationSummary(BaseModel):
+    conversation_id: str
+    title: str
+    document_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    message_count: int
+    last_message_preview: str | None = None
+
+
+class ConversationDetail(BaseModel):
+    conversation: ConversationSummary
+    messages: list[ConversationMessage]
+
+
+class ChatResponse(QueryResponse):
+    conversation: ConversationSummary
 
 
 DocumentStatus = Literal["uploaded", "ingesting", "ready", "failed"]

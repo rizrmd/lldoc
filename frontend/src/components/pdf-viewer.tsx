@@ -22,7 +22,7 @@ export function PdfViewer({ url, initialPage = 1 }: PdfViewerProps) {
   useEffect(() => {
     let cancelled = false
     setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
-    setError(null) // eslint-disable-line react-hooks/set-state-in-effect
+    setError(null)
 
     pdfjsLib.getDocument(url).promise.then(
       (doc) => {

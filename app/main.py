@@ -2,22 +2,29 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
+from app.conversation_registry import ConversationRegistry
 from app.document_registry import DocumentRegistry
 from app.liteparse_client import LiteParseClient
 from app.nvidia_client import NvidiaClient
 from app.qdrant_store import QdrantStore
 from app.rag_service import RagService
 from app.schemas import (
+    ChatMessage,
     ChatRequest,
+    ChatResponse,
+    ConversationDetail,
+    ConversationMessage,
+    ConversationSummary,
     DocumentDetail,
     DocumentSummary,
     IngestionJob,
@@ -43,6 +50,7 @@ def build_service() -> RagService:
 settings = get_settings()
 service = build_service()
 document_registry = DocumentRegistry(settings.app_data_dir)
+conversation_registry = ConversationRegistry(settings.app_data_dir)
 app = FastAPI(title="LiteParse + Qdrant + NVIDIA RAG")
 app.add_middleware(
     CORSMiddleware,
@@ -76,10 +84,10 @@ def query(request: QueryRequest) -> QueryResponse:
     )
 
 
-@app.post("/chat", response_model=QueryResponse)
-def chat(request: ChatRequest) -> QueryResponse:
+@app.post("/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
     try:
-        return service.chat(
+        result = service.chat(
             request.messages,
             top_k=request.top_k,
             document_ids=request.document_ids,
@@ -88,6 +96,57 @@ def chat(request: ChatRequest) -> QueryResponse:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(error),
+        ) from error
+
+    history_messages = [
+        _to_conversation_message(message)
+        for message in request.messages
+        if message.role in {"user", "assistant"} and message.content.strip()
+    ]
+    history_messages.append(
+        ConversationMessage(
+            message_id=f"msg-{uuid.uuid4().hex[:12]}",
+            role="assistant",
+            content=result.answer,
+            created_at=_utc_now(),
+            citations=result.citations,
+            context_count=result.context_count,
+        )
+    )
+    conversation = conversation_registry.sync_conversation(
+        conversation_id=request.conversation_id,
+        messages=history_messages,
+        document_ids=request.document_ids,
+    )
+    return ChatResponse(
+        answer=result.answer,
+        citations=result.citations,
+        context_count=result.context_count,
+        conversation=conversation.conversation,
+    )
+
+
+@app.get("/conversations", response_model=list[ConversationSummary])
+def list_conversations() -> list[ConversationSummary]:
+    return conversation_registry.list_conversations()
+
+
+@app.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+def get_conversation(conversation_id: str) -> ConversationDetail:
+    conversation = conversation_registry.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    return conversation
+
+
+@app.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation(conversation_id: str) -> None:
+    try:
+        conversation_registry.delete_conversation(conversation_id)
+    except KeyError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
         ) from error
 
 
@@ -291,3 +350,22 @@ def _sanitize_filename(file_name: str) -> str:
     cleaned = Path(file_name).name.strip() or "document.bin"
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", cleaned)
     return cleaned or "document.bin"
+
+
+def _to_conversation_message(message: ChatMessage) -> ConversationMessage:
+    normalized_content = message.content.strip()
+    if message.role not in {"user", "assistant"}:
+        raise ValueError(f"Unsupported conversation role: {message.role}")
+    role = cast(Literal["user", "assistant"], message.role)
+    return ConversationMessage(
+        message_id=message.message_id or f"msg-{uuid.uuid4().hex[:12]}",
+        role=role,
+        content=normalized_content,
+        created_at=message.created_at or _utc_now(),
+        citations=message.citations if role == "assistant" else [],
+        context_count=message.context_count if role == "assistant" else 0,
+    )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)

@@ -4,6 +4,7 @@ import argparse
 import json
 
 from app.main import build_service
+from app.schemas import ChatMessage
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_chat(*, top_k: int | None, document_ids: list[str] | None) -> None:
     service = build_service()
+    history: list[ChatMessage] = []
     print("Interactive RAG chat. Type /quit to exit.")
     if document_ids:
         print(f"Filtering documents: {', '.join(document_ids)}")
@@ -50,10 +52,19 @@ def run_chat(*, top_k: int | None, document_ids: list[str] | None) -> None:
             print()
             continue
 
-        result = service.query(
-            question,
+        history.append(ChatMessage(role="user", content=question))
+        result = service.chat(
+            history,
             top_k=top_k,
             document_ids=document_ids,
+        )
+        history.append(
+            ChatMessage(
+                role="assistant",
+                content=result.answer,
+                citations=result.citations,
+                context_count=result.context_count,
+            )
         )
         print(f"assistant> {result.answer}")
         if result.citations:

@@ -1,14 +1,31 @@
-import { useEffect, useMemo, useRef, useState, type FC } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from 'react'
 import {
   AssistantRuntimeProvider,
   useLocalRuntime,
   useMessage,
   type ChatModelAdapter,
+  type ThreadMessageLike,
 } from '@assistant-ui/react'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { FileStack } from 'lucide-react'
+import { FileStack, LoaderCircle } from 'lucide-react'
 
-import { buildApiUrl, chat, type Citation, type DocumentDetail } from '@/lib/api'
+import {
+  buildApiUrl,
+  chat,
+  getConversation,
+  type Citation,
+  type ConversationMessage,
+  type ConversationSummary,
+  type DocumentDetail,
+} from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,8 +42,10 @@ import { PdfViewer } from '@/components/pdf-viewer'
 interface ChatPageProps {
   documents: DocumentDetail[]
   selectedDocumentIds: string[]
+  activeConversationId: string | null
   onToggleDocument: (documentId: string) => void
   onOpenFiles: () => void
+  onConversationChange: (conversation: ConversationSummary) => void
 }
 
 interface StoredCitations {
@@ -34,40 +53,15 @@ interface StoredCitations {
   contextCount: number
 }
 
-// Context for passing citations data to message components
-const CitationsContext = {
-  _map: new Map<string, StoredCitations>(),
-  _docs: [] as DocumentDetail[],
-  set(answer: string, data: StoredCitations) {
-    this._map.set(answer, data)
-  },
-  get(answer: string) {
-    return this._map.get(answer)
-  },
-  setDocs(docs: DocumentDetail[]) {
-    this._docs = docs
-  },
-  getDocLabel(documentId: string) {
-    const match = this._docs.find(
-      (d) => d.document.document_id === documentId,
-    )
-    if (!match) return documentId
-    const title = match.document.title?.trim()
-    if (title) {
-      if (title.length <= 60) return title.replace(/\.$/, '')
-      const trimmed = title.slice(0, 60)
-      const splitAt = trimmed.lastIndexOf(' ')
-      return `${(splitAt > 30 ? trimmed.slice(0, splitAt) : trimmed).replace(/[,:;]+$/, '')}…`
-    }
-    return match.document.file_name
-  },
-}
+const DocumentsContext = createContext<DocumentDetail[]>([])
 
 export function ChatPage({
   documents,
   selectedDocumentIds,
+  activeConversationId,
   onToggleDocument,
   onOpenFiles,
+  onConversationChange,
 }: ChatPageProps) {
   const readyDocuments = documents.filter(
     (d) => d.document.status === 'ready',
@@ -80,32 +74,43 @@ export function ChatPage({
     )
     .map((d) => d.document.document_id)
 
+  const [conversationLoadState, setConversationLoadState] = useState<
+    'idle' | 'loading' | 'error'
+  >('idle')
+
   const selectedIdsRef = useRef(selectedDocumentIds)
   const selectedReadyIdsRef = useRef(selectedReadyIds)
-  useEffect(() => {
-    selectedIdsRef.current = selectedDocumentIds
-    selectedReadyIdsRef.current = selectedReadyIds
-  }, [selectedDocumentIds, selectedReadyIds])
-
-  // Keep citations context in sync
-  const [, forceUpdate] = useState(0)
-  useEffect(() => {
-    CitationsContext.setDocs(documents)
-  }, [documents])
+  const activeConversationIdRef = useRef(activeConversationId)
+  const skipConversationLoadRef = useRef<string | null>(null)
+  selectedIdsRef.current = selectedDocumentIds
+  selectedReadyIdsRef.current = selectedReadyIds
+  activeConversationIdRef.current = activeConversationId
 
   const adapter: ChatModelAdapter = useMemo(
     () => ({
-      async run({ messages, abortSignal }) {
+      async run({ messages, abortSignal, unstable_assistantMessageId }) {
         const currentSelectedIds = selectedIdsRef.current
         const currentReadyIds = selectedReadyIdsRef.current
+        const currentConversationId = activeConversationIdRef.current
 
         const payload = {
-          messages: messages.map((msg) => ({
-            role: msg.role as 'user' | 'assistant' | 'system',
-            content: msg.content
-              .map((part) => (part.type === 'text' ? part.text : ''))
-              .join(''),
-          })),
+          conversation_id: currentConversationId ?? undefined,
+          messages: messages
+            .map((message) => ({
+              role: message.role as 'user' | 'assistant' | 'system',
+              content: getMessageText(message.content),
+              message_id: message.id,
+              created_at: message.createdAt.toISOString(),
+              ...(message.role === 'assistant'
+                ? {
+                    citations: getStoredCitations(message.metadata.custom)
+                      .citations,
+                    context_count: getStoredCitations(message.metadata.custom)
+                      .contextCount,
+                  }
+                : {}),
+            }))
+            .filter((message) => message.content.length > 0),
           document_ids:
             currentSelectedIds.length > 0 ? currentReadyIds : undefined,
         }
@@ -115,37 +120,82 @@ export function ChatPage({
         abortSignal.addEventListener('abort', handleAbort)
 
         try {
-          const response = await chat(payload)
-
-          if (response.citations.length > 0) {
-            CitationsContext.set(response.answer, {
-              citations: response.citations,
-              contextCount: response.context_count,
-            })
-            forceUpdate((n) => n + 1)
-          }
+          const response = await chat(payload, {
+            signal: controller.signal,
+          })
+          skipConversationLoadRef.current = response.conversation.conversation_id
+          onConversationChange(response.conversation)
 
           return {
             content: [{ type: 'text' as const, text: response.answer }],
+            metadata: {
+              custom: {
+                citations: response.citations,
+                contextCount: response.context_count,
+                conversationId: response.conversation.conversation_id,
+                assistantMessageId: unstable_assistantMessageId,
+              },
+            },
           }
         } finally {
           abortSignal.removeEventListener('abort', handleAbort)
         }
       },
     }),
-    [],
+    [onConversationChange],
   )
 
   const runtime = useLocalRuntime(adapter)
+
+  useEffect(() => {
+    let isCancelled = false
+
+    async function loadConversationHistory(conversationId: string) {
+      setConversationLoadState('loading')
+      runtime.thread.reset([])
+
+      try {
+        const detail = await getConversation(conversationId)
+        if (isCancelled) return
+        runtime.thread.reset(detail.messages.map(toThreadMessage))
+        setConversationLoadState('idle')
+      } catch {
+        if (isCancelled) return
+        runtime.thread.reset([])
+        setConversationLoadState('error')
+      }
+    }
+
+    if (!activeConversationId) {
+      runtime.thread.reset([])
+      setConversationLoadState('idle')
+      return () => {
+        isCancelled = true
+      }
+    }
+
+    if (skipConversationLoadRef.current === activeConversationId) {
+      skipConversationLoadRef.current = null
+      setConversationLoadState('idle')
+      return () => {
+        isCancelled = true
+      }
+    }
+
+    void loadConversationHistory(activeConversationId)
+    return () => {
+      isCancelled = true
+    }
+  }, [activeConversationId, runtime])
 
   const hasReadyCorpus =
     selectedDocumentIds.length > 0
       ? selectedReadyIds.length > 0
       : readyDocuments.length > 0
+  const canRenderThread = hasReadyCorpus || activeConversationId !== null
 
   return (
     <div className="flex h-full flex-col">
-      {/* Document selector bar */}
       <div className="flex items-center gap-3 border-b border-border/60 px-5 py-3">
         <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Corpus
@@ -191,9 +241,8 @@ export function ChatPage({
         </Button>
       </div>
 
-      {/* Chat area */}
       <div className="relative flex-1 overflow-hidden">
-        {!hasReadyCorpus ? (
+        {!canRenderThread ? (
           <div className="flex h-full items-center justify-center p-8">
             <div className="text-center">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
@@ -209,28 +258,43 @@ export function ChatPage({
             </div>
           </div>
         ) : (
-          <TooltipProvider>
-            <AssistantRuntimeProvider runtime={runtime}>
-              <AssistantThread />
-            </AssistantRuntimeProvider>
-          </TooltipProvider>
+          <DocumentsContext.Provider value={documents}>
+            <TooltipProvider>
+              <AssistantRuntimeProvider runtime={runtime}>
+                <AssistantThread />
+              </AssistantRuntimeProvider>
+            </TooltipProvider>
+          </DocumentsContext.Provider>
+        )}
+
+        {conversationLoadState === 'loading' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+            <div className="flex items-center gap-2 rounded-full border border-border/60 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm">
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+              Memuat percakapan...
+            </div>
+          </div>
+        )}
+
+        {conversationLoadState === 'error' && (
+          <div className="pointer-events-none absolute inset-x-0 top-4 flex justify-center px-4">
+            <div className="rounded-full border border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+              Gagal memuat conversation history.
+            </div>
+          </div>
         )}
       </div>
     </div>
   )
 }
 
-// Citations component rendered after assistant messages
 export const AssistantMessageCitations: FC = () => {
+  const documents = useContext(DocumentsContext)
   const message = useMessage()
   const [previewCitation, setPreviewCitation] = useState<Citation | null>(null)
-  const textContent = message.content
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map((p) => p.text)
-    .join('')
-  const stored = CitationsContext.get(textContent)
+  const stored = getStoredCitations(message.metadata.custom)
 
-  if (!stored || stored.citations.length === 0) return null
+  if (stored.citations.length === 0) return null
 
   return (
     <>
@@ -244,7 +308,7 @@ export const AssistantMessageCitations: FC = () => {
           >
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-sm font-semibold text-foreground">
-                {CitationsContext.getDocLabel(citation.document_id)}
+                {getDocumentLabel(documents, citation.document_id)}
               </p>
               <Badge variant="outline">p.{citation.page_num}</Badge>
             </div>
@@ -262,11 +326,12 @@ export const AssistantMessageCitations: FC = () => {
         open={previewCitation !== null}
         onOpenChange={(open) => { if (!open) setPreviewCitation(null) }}
       >
-        <DialogContent className="max-w-4xl h-[85vh] flex flex-col p-0">
+        <DialogContent className="flex h-[85vh] max-w-4xl flex-col p-0">
           <DialogHeader className="px-6 pt-6 pb-3">
             <DialogTitle className="flex items-center justify-between gap-3">
               <span className="truncate">
-                {previewCitation && CitationsContext.getDocLabel(previewCitation.document_id)}
+                {previewCitation &&
+                  getDocumentLabel(documents, previewCitation.document_id)}
               </span>
               {previewCitation && (
                 <Badge variant="outline" className="shrink-0">
@@ -287,6 +352,72 @@ export const AssistantMessageCitations: FC = () => {
       </Dialog>
     </>
   )
+}
+
+function toThreadMessage(message: ConversationMessage): ThreadMessageLike {
+  const storedMetadata = {
+    citations: message.citations,
+    contextCount: message.context_count,
+  }
+
+  if (message.role === 'assistant') {
+    return {
+      id: message.message_id,
+      role: 'assistant',
+      content: message.content,
+      createdAt: new Date(message.created_at),
+      status: { type: 'complete', reason: 'stop' },
+      metadata: {
+        custom: storedMetadata,
+      },
+    }
+  }
+
+  return {
+    id: message.message_id,
+    role: 'user',
+    content: message.content,
+    createdAt: new Date(message.created_at),
+  }
+}
+
+function getStoredCitations(
+  custom: Record<string, unknown> | undefined,
+): StoredCitations {
+  const citations = Array.isArray(custom?.citations)
+    ? (custom.citations as Citation[])
+    : []
+  const contextCount =
+    typeof custom?.contextCount === 'number' ? custom.contextCount : 0
+  return {
+    citations,
+    contextCount,
+  }
+}
+
+function getMessageText(
+  parts: readonly {
+    type: string
+    text?: string
+  }[],
+) {
+  return parts
+    .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
+    .join('')
+    .trim()
+}
+
+function getDocumentLabel(documents: DocumentDetail[], documentId: string) {
+  const match = documents.find((d) => d.document.document_id === documentId)
+  if (!match) return documentId
+  const title = match.document.title?.trim()
+  if (title) {
+    if (title.length <= 60) return title.replace(/\.$/, '')
+    const trimmed = title.slice(0, 60)
+    const splitAt = trimmed.lastIndexOf(' ')
+    return `${(splitAt > 30 ? trimmed.slice(0, splitAt) : trimmed).replace(/[,:;]+$/, '')}…`
+  }
+  return match.document.file_name
 }
 
 function getDocumentTitle(document: {

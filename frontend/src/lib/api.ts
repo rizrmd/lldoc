@@ -29,6 +29,38 @@ export interface QueryResponse {
 export interface ChatMessagePayload {
   role: ChatRole
   content: string
+  message_id?: string
+  created_at?: string
+  citations?: Citation[]
+  context_count?: number
+}
+
+export interface ConversationMessage {
+  message_id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+  citations: Citation[]
+  context_count: number
+}
+
+export interface ConversationSummary {
+  conversation_id: string
+  title: string
+  document_ids: string[]
+  created_at: string
+  updated_at: string
+  message_count: number
+  last_message_preview: string | null
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary
+  messages: ConversationMessage[]
+}
+
+export interface ChatResponse extends QueryResponse {
+  conversation: ConversationSummary
 }
 
 export interface DocumentSummary {
@@ -140,6 +172,26 @@ export function listJobs() {
   return request<IngestionJob[]>('/jobs')
 }
 
+export function listConversations() {
+  return request<ConversationSummary[]>('/conversations')
+}
+
+export function getConversation(conversationId: string) {
+  return request<ConversationDetail>(`/conversations/${conversationId}`)
+}
+
+export function deleteConversation(conversationId: string) {
+  return request<void>(
+    `/conversations/${conversationId}`,
+    {
+      method: 'DELETE',
+    },
+    {
+      expectJson: false,
+    },
+  )
+}
+
 export function uploadDocument(file: File) {
   const formData = new FormData()
   formData.append('file', file)
@@ -171,8 +223,12 @@ export function chat(payload: {
   messages: ChatMessagePayload[]
   document_ids?: string[]
   top_k?: number
-}) {
-  return request<QueryResponse>('/chat', {
+  conversation_id?: string
+}, options: {
+  signal?: AbortSignal
+} = {}) {
+  return request<ChatResponse>('/chat', {
+    signal: options.signal,
     method: 'POST',
     body: JSON.stringify(payload),
   })
