@@ -427,7 +427,7 @@ class NvidiaClient:
             temperature=self.settings.nvidia_chat_temperature,
             max_tokens=self.settings.nvidia_chat_max_tokens,
         )
-        return self._rewrite_in_indonesian(answer)
+        return answer
 
     def _rewrite_in_indonesian(self, answer: str) -> str:
         return self._chat_completion(

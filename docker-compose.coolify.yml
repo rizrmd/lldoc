@@ -13,8 +13,11 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       NVIDIA_API_KEY: ${NVIDIA_API_KEY}
-      NVIDIA_CHAT_MODEL: microsoft/phi-3-mini-4k-instruct
+      NVIDIA_CHAT_MODEL: microsoft/phi-3.5-mini-instruct
       NVIDIA_CHAT_MAX_TOKENS: 1024
+      TOP_K: 8
+      RAG_CONTEXT_CHARS_PER_CHUNK: 1200
+      RAG_CONTEXT_MAX_CHARS: 6000
       APP_DATA_DIR: /app/data
       CORS_ORIGINS: ${CORS_ORIGINS:-https://aidoc.avolut.com}
     volumes:
