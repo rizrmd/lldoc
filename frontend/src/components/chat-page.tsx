@@ -323,8 +323,8 @@ export const AssistantMessageCitations: FC = () => {
             <p className="line-clamp-4 text-sm leading-relaxed text-muted-foreground">
               {citation.text}
             </p>
-            <p className="mt-2 text-xs uppercase tracking-wider text-muted-foreground">
-              score {citation.score.toFixed(3)}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Relevansi {Math.min(Math.round(citation.score * 100), 100)}%
             </p>
           </button>
         ))}
