@@ -150,24 +150,32 @@ export function ChatPage({
   useEffect(() => {
     let isCancelled = false
 
+    function safeReset(messages: ThreadMessageLike[]) {
+      try {
+        runtime.thread.reset(messages)
+      } catch {
+        // Ignore if thread is not yet initialized (empty thread placeholder)
+      }
+    }
+
     async function loadConversationHistory(conversationId: string) {
       setConversationLoadState('loading')
-      runtime.thread.reset([])
+      safeReset([])
 
       try {
         const detail = await getConversation(conversationId)
         if (isCancelled) return
-        runtime.thread.reset(detail.messages.map(toThreadMessage))
+        safeReset(detail.messages.map(toThreadMessage))
         setConversationLoadState('idle')
       } catch {
         if (isCancelled) return
-        runtime.thread.reset([])
+        safeReset([])
         setConversationLoadState('error')
       }
     }
 
     if (!activeConversationId) {
-      runtime.thread.reset([])
+      safeReset([])
       setConversationLoadState('idle')
       return () => {
         isCancelled = true
