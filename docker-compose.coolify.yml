@@ -13,6 +13,8 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       NVIDIA_API_KEY: ${NVIDIA_API_KEY}
+      NVIDIA_CHAT_MODEL: meta/llama-3.3-70b-instruct
+      NVIDIA_CHAT_MAX_TOKENS: 1024
       APP_DATA_DIR: /app/data
       CORS_ORIGINS: ${CORS_ORIGINS:-https://aidoc.avolut.com}
     volumes:
